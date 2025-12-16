@@ -13,9 +13,9 @@ from dataset_all import TestData
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 
 bz = 1
-model_root = 'pretrained/model.pth'
-input_root = 'data/test/benchmarkA/'
-save_path = 'result/benchmarkA'
+model_root = 'pretrained\\model.pth'
+input_root = 'test'
+save_path = 'result'
 if not os.path.isdir(save_path):
     os.makedirs(save_path)
 checkpoint = torch.load(model_root)
@@ -40,7 +40,7 @@ if 1:
         print(data_idx)
         with torch.no_grad():
             result, _ = model(data_input, data_la)
-            name = Mydata_.A_paths[data_idx].split('/')[5]
+            name = Mydata_.A_paths[data_idx].split('\\')[-1]
             print(name)
             temp_res = np.transpose(result[0, :].cpu().detach().numpy(), (1, 2, 0))
             temp_res[temp_res > 1] = 1

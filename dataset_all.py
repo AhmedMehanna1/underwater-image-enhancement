@@ -58,9 +58,9 @@ class TrainLabeled(data.Dataset):
         self.root = dataroot
         self.fineSize = finesize
 
-        self.dir_A = os.path.join(self.root, self.phase + '/input')
-        self.dir_B = os.path.join(self.root, self.phase + '/GT')
-        self.dir_C = os.path.join(self.root, self.phase + '/LA')
+        self.dir_A = os.path.join(self.root, self.phase, 'input')
+        self.dir_B = os.path.join(self.root, self.phase, 'GT')
+        self.dir_C = os.path.join(self.root, self.phase, 'LA')
 
         # image path
         self.A_paths = sorted(make_dataset(self.dir_A))
@@ -108,9 +108,9 @@ class TrainUnlabeled(data.Dataset):
         self.root = dataroot
         self.fineSize = finesize
 
-        self.dir_A = os.path.join(self.root, self.phase + '/input')
-        self.dir_C = os.path.join(self.root, self.phase + '/LA')
-        self.dir_D = os.path.join(self.root, self.phase + '/candidate')
+        self.dir_A = os.path.join(self.root, self.phase, 'input')
+        self.dir_C = os.path.join(self.root, self.phase, 'LA')
+        self.dir_D = os.path.join(self.root, self.phase, 'candidate')
 
         # image path
         self.A_paths = sorted(make_dataset(self.dir_A))
@@ -147,9 +147,9 @@ class ValLabeled(data.Dataset):
         self.root = dataroot
         self.fineSize = finesize
 
-        self.dir_A = os.path.join(self.root, self.phase + '/input')
-        self.dir_B = os.path.join(self.root, self.phase + '/GT')
-        self.dir_C = os.path.join(self.root, self.phase + '/LA')
+        self.dir_A = os.path.join(self.root, self.phase, 'input')
+        self.dir_B = os.path.join(self.root, self.phase, 'GT')
+        self.dir_C = os.path.join(self.root, self.phase, 'LA')
 
         # image path
         self.A_paths = sorted(make_dataset(self.dir_A))
@@ -183,8 +183,8 @@ class TestData(data.Dataset):
         super().__init__()
         self.root = dataroot
 
-        self.dir_A = os.path.join(self.root + '/input')
-        self.dir_C = os.path.join(self.root + '/LA')
+        self.dir_A = os.path.join(self.root, 'input')
+        self.dir_C = os.path.join(self.root, 'LA')
 
         # image path
         self.A_paths = sorted(make_dataset(self.dir_A))

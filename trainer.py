@@ -1,4 +1,5 @@
 import torch
+import torch.fx
 import numpy as np
 from tqdm import tqdm
 import torch.nn as nn
@@ -38,7 +39,7 @@ class Trainer:
         self.loss_cr = ContrastLoss().cuda()
         self.consistency = 0.2
         self.consistency_rampup = 100.0
-        self.iqa_metric = pyiqa.create_metric('musiq', as_loss=True).cuda()
+        self.iqa_metric = pyiqa.create_metric('musiq', as_loss=False).cuda()
         vgg_model = vgg16(pretrained=True).features[:16]
         vgg_model = vgg_model.cuda()
         self.loss_per = PerpetualLoss(vgg_model).cuda()
@@ -71,8 +72,10 @@ class Trainer:
 
     def get_reliable(self, teacher_predict, student_predict, positive_list, p_name, score_r):
         N = teacher_predict.shape[0]
-        score_t = self.iqa_metric(teacher_predict).detach().cpu().numpy()
-        score_s = self.iqa_metric(student_predict).detach().cpu().numpy()
+        # score_t = self.iqa_metric(teacher_predict).detach().cpu().numpy()
+        # score_s = self.iqa_metric(student_predict).detach().cpu().numpy()
+        score_t = self._iqa_scores(teacher_predict)
+        score_s = self._iqa_scores(student_predict)
         positive_sample = positive_list.clone()
         for idx in range(0, N):
             if score_t[idx] > score_s[idx]:
@@ -117,6 +120,22 @@ class Trainer:
                 print("Saving a checkpoint: {} ...".format(str(ckpt_name)))
                 torch.save(state, ckpt_name)
 
+    def _iqa_scores(self, imgs: torch.Tensor) -> np.ndarray:
+        with torch.no_grad():
+            out = self.iqa_metric(imgs)
+
+        out = out.detach()
+
+        if out.ndim == 0:
+            scores = []
+            for i in range(imgs.size(0)):
+                s = self.iqa_metric(imgs[i:i+1]).detach()
+                scores.append(float(s.item()) if s.numel() == 1 else float(s.mean().item()))
+            return np.asarray(scores, dtype=np.float32)
+
+        out = out.view(out.size(0), -1).mean(dim=1)
+        return out.cpu().numpy()
+
     def _train_epoch(self, epoch):
         sup_loss = AverageMeter()
         unsup_loss = AverageMeter()
@@ -148,7 +167,8 @@ class Trainer:
             gradient_loss = self.loss_grad(get_grad(outputs_l), get_grad(label)) + self.loss_grad(outputs_g, get_grad(label))
             loss_sup = structure_loss + 0.3 * perpetual_loss + 0.1 * gradient_loss
             sup_loss.update(loss_sup.mean().item())
-            score_r = self.iqa_metric(p_list).detach().cpu().numpy()
+            # score_r = self.iqa_metric(p_list).detach().cpu().numpy()
+            score_r = self._iqa_scores(p_list)
             p_sample = self.get_reliable(predict_target_u, outputs_ul, p_list, p_name, score_r)
             loss_unsu = self.loss_unsup(outputs_ul, p_sample) + self.loss_cr(outputs_ul, p_sample, unpaired_data_s)
             unsup_loss.update(loss_unsu.mean().item())
