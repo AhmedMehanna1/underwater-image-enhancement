@@ -43,9 +43,9 @@ def main(gpu, args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training')
-    parser.add_argument('-g', '--gpus', default=1, type=int, metavar='N')
+    parser.add_argument('-g', '--gpus', default=2, type=int, metavar='N')
     parser.add_argument('--num_epochs', default=200, type=int)
-    parser.add_argument('--train_batchsize', default=4, type=int, help='train batchsize')
+    parser.add_argument('--train_batchsize', default=8, type=int, help='train batchsize')
     parser.add_argument('--val_batchsize', default=4, type=int, help='val batchsize')
     parser.add_argument('--crop_size', default=256, type=int, help='crop size')
     parser.add_argument('--resume', default='False', type=str, help='if resume')
