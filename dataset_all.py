@@ -63,9 +63,9 @@ class TrainLabeled(data.Dataset):
         self.dir_C = os.path.join(self.root, self.phase, 'LA')
 
         # image path
-        self.A_paths = sorted(make_dataset(self.dir_A))[:8]
-        self.B_paths = sorted(make_dataset(self.dir_B))[:8]
-        self.C_paths = sorted(make_dataset(self.dir_C))[:8]
+        self.A_paths = sorted(make_dataset(self.dir_A))
+        self.B_paths = sorted(make_dataset(self.dir_B))
+        self.C_paths = sorted(make_dataset(self.dir_C))
 
         # transform
         self.transform = ToTensor()  # [0,1]
@@ -113,9 +113,9 @@ class TrainUnlabeled(data.Dataset):
         self.dir_D = os.path.join(self.root, self.phase, 'candidate')
 
         # image path
-        self.A_paths = sorted(make_dataset(self.dir_A))[:8]
-        self.C_paths = sorted(make_dataset(self.dir_C))[:8]
-        self.D_paths = sorted(make_dataset(self.dir_D))[:8]
+        self.A_paths = sorted(make_dataset(self.dir_A))
+        self.C_paths = sorted(make_dataset(self.dir_C))
+        self.D_paths = sorted(make_dataset(self.dir_D))
 
         # transform
         self.transform = ToTensor()  # [0,1]
@@ -152,9 +152,9 @@ class ValLabeled(data.Dataset):
         self.dir_C = os.path.join(self.root, self.phase, 'LA')
 
         # image path
-        self.A_paths = sorted(make_dataset(self.dir_A))[:4]
-        self.B_paths = sorted(make_dataset(self.dir_B))[:4]
-        self.C_paths = sorted(make_dataset(self.dir_C))[:4]
+        self.A_paths = sorted(make_dataset(self.dir_A))
+        self.B_paths = sorted(make_dataset(self.dir_B))
+        self.C_paths = sorted(make_dataset(self.dir_C))
 
         # transform
         self.transform = ToTensor()  # [0,1]
