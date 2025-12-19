@@ -89,6 +89,7 @@ class Trainer:
         return positive_sample
 
     def train(self):
+        best_loss = math.inf
         self.freeze_teachers_parameters()
         if self.start_epoch == 1:
             initialize_weights(self.model)
@@ -113,10 +114,16 @@ class Trainer:
                 state = {'arch': type(self.model).__name__,
                          'epoch': epoch,
                          'state_dict': self.model.state_dict(),
-                         'optimizer_dict': self.optimizer_s.state_dict()}
+                         'optimizer_dict': self.optimizer_s.state_dict(),
+                         "best_loss": best_loss}
                 ckpt_name = str(self.args.save_path) + 'model_e{}.pth'.format(str(epoch))
                 print("Saving a checkpoint: {} ...".format(str(ckpt_name)))
                 torch.save(state, ckpt_name)
+
+            if loss_val < best_loss:
+                best_loss = loss_val
+                print("Saving best model results: {} ...")
+                torch.save(self.model.state_dict(), './model/model_best.pth')
 
     def _train_epoch(self, epoch):
         sup_loss = AverageMeter()
