@@ -3,6 +3,105 @@ from utils import *
 from attention import NonLocalSparseAttention
 from deform_conv import DCN_layer
 
+class VSSBlock2D(nn.Module):
+    """
+    Vision-Mamba-style block (pure PyTorch, torch 1.8.1 compatible):
+    - LN (channel)
+    - 1x1 in_proj -> (u, gate)
+    - depthwise conv on u (local mixing)
+    - SS2D-like global mixing via 4 directional EMA-scans (no custom CUDA)
+    - gated output + 1x1 out_proj
+    - residual
+    """
+    def __init__(self, dim, expand=2, dw_kernel=3, eps=1e-5):
+        super().__init__()
+        self.dim = dim
+        inner = dim * expand
+
+        self.norm = nn.LayerNorm(dim, eps=eps)
+        self.in_proj = nn.Conv2d(dim, 2 * inner, kernel_size=1, bias=True)
+        self.dwconv = nn.Conv2d(inner, inner, kernel_size=dw_kernel,
+                                padding=dw_kernel // 2, groups=inner, bias=True)
+
+        # Per-channel decay (0..1). This is a simplified, stable “selective-scan-like” core.
+        self.a_logit = nn.Parameter(torch.zeros(inner))
+        # Optional skip/“D” term (like Mamba has a direct path)
+        self.D = nn.Parameter(torch.zeros(inner))
+
+        self.out_proj = nn.Conv2d(inner, dim, kernel_size=1, bias=True)
+
+    def _ema_scan_1d(self, x, a, reverse=False):
+        """
+        x: (N, C, L)
+        a: (1, C, 1) in (0,1)
+        Computes s_t = a*s_{t-1} + x_t in a vectorized way.
+        """
+        if reverse:
+            x = torch.flip(x, dims=[-1])
+
+        N, C, L = x.shape
+        t = torch.arange(L, device=x.device, dtype=x.dtype).view(1, 1, L)
+
+        # p = a^t = exp(t * log(a)) (more stable than pow for small a)
+        log_a = torch.log(a)
+        p = torch.exp(t * log_a)  # (1, C, L)
+
+        y = torch.cumsum(x / (p + 1e-6), dim=-1) * p
+
+        if reverse:
+            y = torch.flip(y, dims=[-1])
+        return y
+
+    def _ss2d(self, u):
+        """
+        u: (B, C, H, W)
+        Applies 4 directional scans and fuses them.
+        """
+        B, C, H, W = u.shape
+
+        # a2d for broadcasting with (B,C,H,W)
+        a2d = torch.sigmoid(self.a_logit).view(1, C, 1, 1)
+        a2d = a2d * (1.0 - 2e-4) + 1e-4  # keep in (1e-4, 1-1e-4)
+
+        # a1d for scan math (1,C,1)
+        a1d = a2d.view(1, C, 1)
+
+        # stable EMA-style scaling
+        u_in = (1.0 - a2d) * u
+
+        # Horizontal scans (left<->right): sequences of length W for each row
+        uh = u_in.permute(0, 2, 1, 3).contiguous().view(B * H, C, W)  # (B*H, C, W)
+        y_lr = self._ema_scan_1d(uh, a1d, reverse=False)
+        y_rl = self._ema_scan_1d(uh, a1d, reverse=True)
+        y_h = (y_lr + y_rl).view(B, H, C, W).permute(0, 2, 1, 3).contiguous()
+
+        # Vertical scans (top<->bottom): sequences of length H for each column
+        uv = u_in.permute(0, 3, 1, 2).contiguous().view(B * W, C, H)  # (B*W, C, H)
+        y_tb = self._ema_scan_1d(uv, a1d, reverse=False)
+        y_bt = self._ema_scan_1d(uv, a1d, reverse=True)
+        y_v = (y_tb + y_bt).view(B, W, C, H).permute(0, 2, 3, 1).contiguous()
+
+        # Fuse
+        y = 0.5 * (y_h + y_v)
+
+        # "D" term
+        y = y + self.D.view(1, C, 1, 1) * u
+        return y
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+
+        # LayerNorm over channel: (B,H,W,C) -> LN(C) -> back
+        x_ln = self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2).contiguous()
+
+        u, gate = self.in_proj(x_ln).chunk(2, dim=1)  # (B,inner,H,W) each
+        u = self.dwconv(u)
+
+        y = self._ss2d(u)
+        y = y * F.silu(gate)          # gated output
+        y = self.out_proj(y)
+
+        return x + y                  # residual
 
 class SFT_layer(nn.Module):
     def __init__(self, channels_in, channels_out):
@@ -271,8 +370,10 @@ class AIMnet(nn.Module):
         self.atb_mid = AtrousBlock(int(n_feat * chan_factor ** 1), 3, 1, self.act, atrous)
         self.atb_bot = AtrousBlock(int(n_feat * chan_factor ** 2), 3, 1, self.act, atrous)
         self.nl_top = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 0))
-        self.nl_mid = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 1))
-        self.nl_bot = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 2))
+        # self.nl_mid = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 1))
+        # self.nl_bot = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 2))
+        self.nl_mid = VSSBlock2D(dim=int(n_feat * chan_factor ** 1), expand=2, dw_kernel=3)
+        self.nl_bot = VSSBlock2D(dim=int(n_feat * chan_factor ** 2), expand=2, dw_kernel=3)
 
         self.down2 = DownSample(int((chan_factor ** 0) * n_feat), 2, chan_factor)
         self.down4 = nn.Sequential(

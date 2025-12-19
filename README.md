@@ -24,6 +24,37 @@ Despite the remarkable achievement of recent underwater image restoration techni
 
 Other dependencies are listed in `requirements.txt`
 
+## Installation Process
+
+```shell
+
+python3.8 -m venv venv38
+
+pip install --upgrade pip
+
+pip install torch==1.8.1+cu111 torchvision==0.9.1+cu111 torchaudio===0.8.1 -f https://download.pytorch.org/whl/torch_stable.html
+
+pip uninstall numpy
+
+pip install numpy==1.20.0
+
+pip uninstall scikit-image pandas
+
+pip install pandas==1.2.1
+
+pip uninstall pyiqa
+
+pip install scikit-image==0.18.1
+
+pip install pyiqa==0.1.4
+
+pip install --no-cache-dir --only-binary=:all: "mmcv-full==1.7.2" -f https://download.openmmlab.com/mmcv/dist/cu111/torch1.8.0/index.html
+
+```
+
+1. python3.8 -m venv venv38
+2. 
+
 ## Data Preparation
 
 Run `data_split.py` to randomly split your paired datasets into training, validation and testing set.

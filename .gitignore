@@ -6,3 +6,4 @@ venv38
 __pycache__
 model/log/*
 model/ckpt/*
+.ssh
