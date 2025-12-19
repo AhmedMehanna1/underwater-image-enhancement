@@ -92,11 +92,11 @@ class Trainer:
     def train(self):
         best_loss = math.inf
         self.freeze_teachers_parameters()
-        if self.args.resume_path is None:
+        if not self.args.resume:
             initialize_weights(self.model)
         else:
-            print("Loading checkpoint: {} ...".format(self.args.resume_path))
-            checkpoint = torch.load(self.args.resume_path)
+            print("Loading checkpoint: {}/ckpt.pth ...".format(self.args.resume_path))
+            checkpoint = torch.load(self.args.save_path + "ckpt.pth")
             self.model.load_state_dict(checkpoint['state_dict'])
             self.optimizer_s.load_state_dict(checkpoint['optimizer_dict'])
             self.start_epoch = checkpoint['epoch'] + 1
@@ -115,15 +115,15 @@ class Trainer:
                 self.writer.add_histogram(f"{name}", param, 0)
 
             # Save checkpoint
-            if epoch % self.save_period == 0 and self.args.local_rank <= 0:
-                state = {'arch': type(self.model).__name__,
-                         'epoch': epoch,
-                         'state_dict': self.model.state_dict(),
-                         'optimizer_dict': self.optimizer_s.state_dict(),
-                         "best_loss": best_loss}
-                ckpt_name = str(self.args.save_path) + 'model_e{}.pth'.format(str(epoch))
-                print("Saving a checkpoint: {} ...".format(str(ckpt_name)))
-                torch.save(state, ckpt_name)
+            #if epoch % self.save_period == 0 and self.args.local_rank <= 0:
+            state = {'arch': type(self.model).__name__,
+                     'epoch': epoch,
+                     'state_dict': self.model.state_dict(),
+                     'optimizer_dict': self.optimizer_s.state_dict(),
+                     "best_loss": best_loss}
+            ckpt_name = str(self.args.save_path) + 'ckpt.pth'.format(str(epoch))
+            print("Saving a checkpoint: {} ...".format(str(ckpt_name)))
+            torch.save(state, ckpt_name)
 
             if loss_val < best_loss:
                 best_loss = loss_val
@@ -169,9 +169,10 @@ class Trainer:
             consistency_weight = self.get_current_consistency_weight(epoch)
             total_loss = consistency_weight * loss_unsu + loss_sup
             total_loss = total_loss.mean()
-            psnr = to_psnr(outputs_l, label)
-            psnr_meter.update(psnr)
-            psnr_train.extend(psnr)
+            psnr_batch = to_psnr(outputs_l, label)
+            for psnr in psnr_batch:
+                psnr_meter.update(psnr)
+            psnr_train.extend(psnr_batch)
             self.optimizer_s.zero_grad()
             total_loss.backward()
             self.optimizer_s.step()
