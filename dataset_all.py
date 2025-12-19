@@ -179,9 +179,10 @@ class ValLabeled(data.Dataset):
 
 
 class TestData(data.Dataset):
-    def __init__(self, dataroot):
+    def __init__(self, dataroot, fineSize):
         super().__init__()
         self.root = dataroot
+        self.fineSize = fineSize
 
         self.dir_A = os.path.join(self.root, 'input')
         self.dir_C = os.path.join(self.root, 'LA')
@@ -197,9 +198,13 @@ class TestData(data.Dataset):
         # A, B is the image pair, hazy, gt respectively
         A = Image.open(self.A_paths[index]).convert("RGB")
         C = Image.open(self.C_paths[index]).convert("RGB")
+
+        resized_a = A.resize((self.fineSize, self.fineSize), Image.ANTIALIAS)
+        resized_c = C.resize((self.fineSize, self.fineSize), Image.ANTIALIAS)
+
         # transform to (0, 1)
-        tensor_a = self.transform(A)
-        tensor_c = self.transform(C)
+        tensor_a = self.transform(resized_a)
+        tensor_c = self.transform(resized_c)
 
         return tensor_a, tensor_c
 
