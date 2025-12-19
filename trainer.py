@@ -16,6 +16,7 @@ from loss.losses import *
 from model import GetGradientNopadding
 from loss.contrast import ContrastLoss
 import pyiqa
+import math
 
 
 class Trainer:
@@ -91,11 +92,15 @@ class Trainer:
     def train(self):
         best_loss = math.inf
         self.freeze_teachers_parameters()
-        if self.start_epoch == 1:
+        if self.args.resume_path is None:
             initialize_weights(self.model)
         else:
+            print("Loading checkpoint: {} ...".format(self.args.resume_path))
             checkpoint = torch.load(self.args.resume_path)
             self.model.load_state_dict(checkpoint['state_dict'])
+            self.optimizer_s.load_state_dict(checkpoint['optimizer_dict'])
+            self.start_epoch = checkpoint['epoch'] + 1
+            best_loss = checkpoint['best_loss']
         for epoch in range(self.start_epoch, self.epochs + 1):
             loss_ave, psnr_train = self._train_epoch(epoch)
             loss_val = loss_ave.item() / self.args.crop_size * self.args.train_batchsize
@@ -128,6 +133,7 @@ class Trainer:
     def _train_epoch(self, epoch):
         sup_loss = AverageMeter()
         unsup_loss = AverageMeter()
+        psnr_meter = AverageMeter()
         loss_total_ave = 0.0
         psnr_train = []
         self.model.train()
@@ -163,13 +169,15 @@ class Trainer:
             consistency_weight = self.get_current_consistency_weight(epoch)
             total_loss = consistency_weight * loss_unsu + loss_sup
             total_loss = total_loss.mean()
-            psnr_train.extend(to_psnr(outputs_l, label))
+            psnr = to_psnr(outputs_l, label)
+            psnr_meter.update(psnr)
+            psnr_train.extend(psnr)
             self.optimizer_s.zero_grad()
             total_loss.backward()
             self.optimizer_s.step()
 
-            tbar.set_description('Train-Student Epoch {} | Ls {:.4f} Lu {:.4f}|'
-                                 .format(epoch, sup_loss.avg, unsup_loss.avg))
+            tbar.set_description('Train-Student Epoch {} | Ls {:.4f} Lu {:.4f}| psnr {:.4f}'
+                                 .format(epoch, sup_loss.avg, unsup_loss.avg, psnr_meter.avg))
 
             del img_data, label, unpaired_data_w, unpaired_data_s, img_la, unpaired_la,
             with torch.no_grad():
