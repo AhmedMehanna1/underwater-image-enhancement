@@ -9,4 +9,3 @@ __pycache__
 model/log/*
 model/ckpt/*
 .ssh
-nohup*
