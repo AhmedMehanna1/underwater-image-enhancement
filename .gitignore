@@ -1,4 +1,6 @@
 data
+data2
+data_bkp
 test
 result
 venv38
@@ -7,3 +9,4 @@ __pycache__
 model/log/*
 model/ckpt/*
 .ssh
+nohup*

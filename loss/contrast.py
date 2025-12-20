@@ -8,6 +8,12 @@ import numpy as np
 from torchvision import models
 
 
+def imagenet_norm(x):
+    mean = x.new_tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+    std = x.new_tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+    return (x - mean) / std
+
+
 class Vgg19(torch.nn.Module):
     def __init__(self, requires_grad=False):
         super(Vgg19, self).__init__()
@@ -42,25 +48,32 @@ class Vgg19(torch.nn.Module):
 
 class ContrastLoss(nn.Module):
     def __init__(self, ablation=False):
-
         super(ContrastLoss, self).__init__()
         self.vgg = Vgg19().cuda()
+        self.vgg.eval()
         self.l1 = nn.L1Loss().cuda()
         self.weights = [1.0/32, 1.0/16, 1.0/8, 1.0/4, 1.0]
         self.ab = ablation
 
     def forward(self, a, p, n):
-        a_vgg, p_vgg, n_vgg = self.vgg(a), self.vgg(p), self.vgg(n)
-        loss = 0
+        a = imagenet_norm(a)
+        p = imagenet_norm(p)
+        n = imagenet_norm(n)
 
-        d_ap, d_an = 0, 0
+        a_vgg = self.vgg(a)  # keep grads
+
+        with torch.no_grad():
+            p_vgg = self.vgg(p)
+            n_vgg = self.vgg(n)
+
+        loss = 0
         for i in range(len(a_vgg)):
-            d_ap = self.l1(a_vgg[i], p_vgg[i].detach())
+            d_ap = self.l1(a_vgg[i], p_vgg[i])
             if not self.ab:
-                d_an = self.l1(a_vgg[i], n_vgg[i].detach())
+                d_an = self.l1(a_vgg[i], n_vgg[i])
                 contrastive = d_ap / (d_an + 1e-7)
             else:
                 contrastive = d_ap
-
             loss = loss + self.weights[i] * contrastive
+
         return loss

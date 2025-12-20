@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.fx
 import numpy as np
@@ -40,7 +42,11 @@ class Trainer:
         self.loss_cr = ContrastLoss().cuda()
         self.consistency = 0.2
         self.consistency_rampup = 100.0
-        self.iqa_metric = pyiqa.create_metric('musiq', as_loss=True).cuda()
+        self.get_grad = GetGradientNopadding().cuda()
+        self.iqa_metric = pyiqa.create_metric('musiq', as_loss=False).cuda()
+        self.iqa_metric.eval()
+        for p in self.iqa_metric.parameters():
+            p.requires_grad_(False)
         vgg_model = vgg16(pretrained=True).features[:16]
         vgg_model = vgg_model.cuda()
         self.loss_per = PerpetualLoss(vgg_model).cuda()
@@ -73,8 +79,11 @@ class Trainer:
 
     def get_reliable(self, teacher_predict, student_predict, positive_list, p_name, score_r):
         N = teacher_predict.shape[0]
-        score_t = self.iqa_metric(teacher_predict).detach().cpu().numpy()
-        score_s = self.iqa_metric(student_predict).detach().cpu().numpy()
+        grad_state = torch.is_grad_enabled()
+        with torch.no_grad():
+            score_t = self.iqa_metric(teacher_predict).detach().cpu().numpy()
+            score_s = self.iqa_metric(student_predict).detach().cpu().numpy()
+        torch.set_grad_enabled(grad_state)
         positive_sample = positive_list.clone()
         for idx in range(0, N):
             if score_t[idx] > score_s[idx]:
@@ -90,20 +99,23 @@ class Trainer:
         return positive_sample
 
     def train(self):
-        best_loss = math.inf
+        best_psnr = -1e9
         self.freeze_teachers_parameters()
         if not self.args.resume:
             initialize_weights(self.model)
         else:
-            print("Loading checkpoint: {}/ckpt.pth ...".format(self.args.resume_path))
+            print("Loading checkpoint: {}/ckpt.pth ...".format(self.args.save_path))
             checkpoint = torch.load(self.args.save_path + "ckpt.pth")
             self.model.load_state_dict(checkpoint['state_dict'])
             self.optimizer_s.load_state_dict(checkpoint['optimizer_dict'])
             self.start_epoch = checkpoint['epoch'] + 1
-            best_loss = checkpoint['best_loss']
+            self.tmodel.load_state_dict(checkpoint['teacher_state_dict'])
+            self.lr_scheduler_s.load_state_dict(checkpoint['scheduler_dict'])
+            self.curiter = checkpoint.get('curiter', 0)
+            best_psnr = checkpoint.get('best_psnr', -1e9)
         for epoch in range(self.start_epoch, self.epochs + 1):
             loss_ave, psnr_train = self._train_epoch(epoch)
-            loss_val = loss_ave.item() / self.args.crop_size * self.args.train_batchsize
+            loss_val = float(loss_ave)
             train_psnr = sum(psnr_train) / len(psnr_train)
             psnr_val = self._valid_epoch(max(0, epoch))
             val_psnr = sum(psnr_val) / len(psnr_val)
@@ -115,26 +127,32 @@ class Trainer:
                 self.writer.add_histogram(f"{name}", param, 0)
 
             # Save checkpoint
-            #if epoch % self.save_period == 0 and self.args.local_rank <= 0:
+
             state = {'arch': type(self.model).__name__,
                      'epoch': epoch,
                      'state_dict': self.model.state_dict(),
                      'optimizer_dict': self.optimizer_s.state_dict(),
-                     "best_loss": best_loss}
-            ckpt_name = str(self.args.save_path) + 'ckpt.pth'.format(str(epoch))
-            print("Saving a checkpoint: {} ...".format(str(ckpt_name)))
+                     'teacher_state_dict': self.tmodel.state_dict(),
+                     'scheduler_dict': self.lr_scheduler_s.state_dict(),
+                     'curiter': self.curiter,
+                     'best_psnr': best_psnr
+                     }
+            ckpt_name = os.path.join(self.args.save_path, 'ckpt_last.pth')
             torch.save(state, ckpt_name)
 
-            if loss_val < best_loss:
-                best_loss = loss_val
-                print("Saving best model results: {} ...")
-                torch.save(self.model.state_dict(), './model/model_best.pth')
+            if epoch % self.save_period == 0:
+                torch.save(state, os.path.join(self.args.save_path, f'ckpt_epoch_{epoch}.pth'))
+
+            if val_psnr > best_psnr:
+                best_psnr = val_psnr
+                print(f"Saving best model (val_psnr={best_psnr:.4f}) ...")
+                torch.save(self.model.state_dict(), os.path.join(self.args.save_path, 'model_best_student.pth'))
 
     def _train_epoch(self, epoch):
         sup_loss = AverageMeter()
         unsup_loss = AverageMeter()
         psnr_meter = AverageMeter()
-        loss_total_ave = 0.0
+        total_loss_meter = AverageMeter()
         psnr_train = []
         self.model.train()
         self.freeze_teachers_parameters()
@@ -158,17 +176,20 @@ class Trainer:
             outputs_ul, _ = self.model(unpaired_data_s, unpaired_la)
             structure_loss = self.loss_str(outputs_l, label)
             perpetual_loss = self.loss_per(outputs_l, label)
-            get_grad = GetGradientNopadding().cuda()
-            gradient_loss = self.loss_grad(get_grad(outputs_l), get_grad(label)) + self.loss_grad(outputs_g, get_grad(label))
+            gradient_loss = self.loss_grad(self.get_grad(outputs_l), self.get_grad(label)) + self.loss_grad(outputs_g, self.get_grad(label))
             loss_sup = structure_loss + 0.3 * perpetual_loss + 0.1 * gradient_loss
             sup_loss.update(loss_sup.mean().item())
-            score_r = self.iqa_metric(p_list).detach().cpu().numpy()
-            p_sample = self.get_reliable(predict_target_u, outputs_ul, p_list, p_name, score_r)
+            grad_state = torch.is_grad_enabled()
+            with torch.no_grad():
+                score_r = self.iqa_metric(p_list).detach().cpu().numpy()
+                p_sample = self.get_reliable(predict_target_u, outputs_ul, p_list, p_name, score_r)
+            torch.set_grad_enabled(grad_state)
             loss_unsu = self.loss_unsup(outputs_ul, p_sample) + self.loss_cr(outputs_ul, p_sample, unpaired_data_s)
             unsup_loss.update(loss_unsu.mean().item())
             consistency_weight = self.get_current_consistency_weight(epoch)
             total_loss = consistency_weight * loss_unsu + loss_sup
             total_loss = total_loss.mean()
+            total_loss_meter.update(total_loss.item())
             psnr_batch = to_psnr(outputs_l, label)
             for psnr in psnr_batch:
                 psnr_meter.update(psnr)
@@ -185,13 +206,11 @@ class Trainer:
                 self.update_teachers(teacher=self.tmodel, itera=self.curiter)
                 self.curiter = self.curiter + 1
 
-        loss_total_ave = loss_total_ave + total_loss
-
         self.writer.add_scalar('Train_loss', total_loss, global_step=epoch)
         self.writer.add_scalar('sup_loss', sup_loss.avg, global_step=epoch)
         self.writer.add_scalar('unsup_loss', unsup_loss.avg, global_step=epoch)
         self.lr_scheduler_s.step(epoch=epoch - 1)
-        return loss_total_ave, psnr_train
+        return total_loss_meter.avg, psnr_train
 
     def _valid_epoch(self, epoch):
         psnr_val = []

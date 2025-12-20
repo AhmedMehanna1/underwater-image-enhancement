@@ -370,8 +370,8 @@ class AIMnet(nn.Module):
         self.atb_mid = AtrousBlock(int(n_feat * chan_factor ** 1), 3, 1, self.act, atrous)
         self.atb_bot = AtrousBlock(int(n_feat * chan_factor ** 2), 3, 1, self.act, atrous)
         self.nl_top = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 0))
-        # self.nl_mid = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 1))
-        # self.nl_bot = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 2))
+        #self.nl_mid = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 1))
+        #self.nl_bot = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 2))
         self.nl_mid = VSSBlock2D(dim=int(n_feat * chan_factor ** 1), expand=2, dw_kernel=3)
         self.nl_bot = VSSBlock2D(dim=int(n_feat * chan_factor ** 2), expand=2, dw_kernel=3)
 

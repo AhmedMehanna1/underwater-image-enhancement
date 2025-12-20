@@ -48,7 +48,7 @@ if __name__ == '__main__':
     parser.add_argument('--train_batchsize', default=8, type=int, help='train batchsize')
     parser.add_argument('--val_batchsize', default=4, type=int, help='val batchsize')
     parser.add_argument('--crop_size', default=256, type=int, help='crop size')
-    parser.add_argument('--resume', default='False', type=str, help='if resume')
+    parser.add_argument('--resume', default=False, type=str, help='if resume')
     parser.add_argument('--resume_path', default='/path/to/your/net.pth', type=str, help='if resume')
     parser.add_argument('--use_pretrain', default='False', type=str, help='use pretained model')
     parser.add_argument('--pretrained_path', default='/path/to/pretained/net.pth', type=str, help='if pretrained')

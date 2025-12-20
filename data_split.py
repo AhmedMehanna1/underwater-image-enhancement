@@ -57,6 +57,6 @@ def data_set_split(src_folder, target_folder, train_scale=0.8, val_scale=0.1, te
         print("test set{}: {}".format(test_folder, test_num))
 
 
-src_folder = "./data/"
-target_folder = "./data/"
+src_folder = "./data/labeled"
+target_folder = "./data/labeled"
 data_set_split(src_folder, target_folder)

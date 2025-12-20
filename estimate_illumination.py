@@ -32,8 +32,8 @@ def process_one(path: str, out_dir: str):
     return path
 
 def main():
-    input_dir = "data/test/input"
-    result_dir = "data/test/LA"
+    input_dir = "data/unlabeled/input"
+    result_dir = "data/unlabeled/LA"
     os.makedirs(result_dir, exist_ok=True)
 
     paths = glob(join(input_dir, "*.*"))
