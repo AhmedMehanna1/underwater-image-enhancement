@@ -13,9 +13,10 @@ from dataset_all import TestData
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 
 bz = 1
-model_root = 'pretrained/model.pth'
-input_root = 'data/val'
-save_path = 'result'
+#model_root = 'pretrained/model.pth'
+model_root = 'model/ckpt/model_best_student.pth'
+input_root = 'test/u45'
+save_path = 'test/u45/enhanced'
 if not os.path.isdir(save_path):
     os.makedirs(save_path)
 checkpoint = torch.load(model_root)
@@ -24,10 +25,7 @@ data_load = data.DataLoader(Mydata_, batch_size=bz)
 
 model = AIMnet().cuda()
 model = nn.DataParallel(model, device_ids=[0, 1])
-optimizer = AdamP(model.parameters(), lr=2e-4, betas=(0.9, 0.999), weight_decay=1e-4)
-model.load_state_dict(checkpoint['state_dict'])
-optimizer.load_state_dict(checkpoint['optimizer_dict'])
-epoch = checkpoint['epoch']
+model.load_state_dict(checkpoint)
 model.eval()
 print('START!')
 if 1:
