@@ -6,6 +6,6 @@ result
 venv38
 .idea
 __pycache__
-model/log/*
-model/ckpt/*
+model*/log/*
+model*/ckpt/*
 .ssh
