@@ -3,16 +3,28 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class CharbonnierLoss(nn.Module):
+    def __init__(self, eps=1e-3):
+        super(CharbonnierLoss, self).__init__()
+        self.eps = eps
+
+    def forward(self, x, y):
+        return torch.mean(torch.sqrt((x - y) ** 2 + self.eps ** 2))
+
+
 class MyLoss(nn.Module):
     def __init__(self):
         super(MyLoss, self).__init__()
-        self.L1 = nn.L1Loss()
+        # self.L1 = nn.L1Loss()
+        self.Charbonnier = CharbonnierLoss()
         self.L2 = nn.MSELoss()
 
     def forward(self, xs, ys):
         L2_temp = 0.2 * self.L2(xs, ys)
-        L1_temp = 0.8 * self.L1(xs, ys)
-        L_total = L1_temp + L2_temp
+        # L1_temp = 0.8 * self.L1(xs, ys)
+        # L_total = L1_temp + L2_temp
+        charbonnier_temp = 0.8 * self.Charbonnier(xs, ys)
+        L_total = charbonnier_temp + L2_temp
         return L_total
 
 

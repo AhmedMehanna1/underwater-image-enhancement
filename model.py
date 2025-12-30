@@ -30,6 +30,13 @@ class VSSBlock2D(nn.Module):
 
         self.out_proj = nn.Conv2d(inner, dim, kernel_size=1, bias=True)
 
+        self.ffn_norm = nn.LayerNorm(dim, eps=eps)
+        self.ffn = nn.Sequential(
+            nn.Conv2d(dim, dim * 2, 1),
+            nn.GELU(),
+            nn.Conv2d(dim * 2, dim, 1)
+        )
+
     def _ema_scan_1d(self, x, a, reverse=False):
         """
         x: (N, C, L)
@@ -101,7 +108,12 @@ class VSSBlock2D(nn.Module):
         y = y * F.silu(gate)          # gated output
         y = self.out_proj(y)
 
-        return x + y                  # residual
+        x = x + y                  # residual
+
+        # FFN (channel mixing)
+        x_ln2 = self.ffn_norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2).contiguous()
+        x = x + self.ffn(x_ln2)
+        return x
 
 class SFT_layer(nn.Module):
     def __init__(self, channels_in, channels_out):
@@ -217,10 +229,18 @@ class Up(nn.Module):
     def __init__(self, in_channels, chan_factor, bias=False):
         super(Up, self).__init__()
 
+        out_ch = int(in_channels // chan_factor)
+
         self.bot = nn.Sequential(
-            nn.Conv2d(in_channels, int(in_channels // chan_factor), 1, stride=1, padding=0, bias=bias),
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=bias)
+            nn.Conv2d(in_channels, out_ch * 4, 1, 1, 0, bias=bias),
+            nn.PixelShuffle(2),
+            nn.Conv2d(out_ch, out_ch, 3, 1, 1, bias=bias)
         )
+
+        # self.bot = nn.Sequential(
+        #     nn.Conv2d(in_channels, int(in_channels // chan_factor), 1, stride=1, padding=0, bias=bias),
+        #     nn.Upsample(scale_factor=2, mode='bilinear', align_corners=bias)
+        # )
 
     def forward(self, x):
         return self.bot(x)
@@ -406,6 +426,11 @@ class AIMnet(nn.Module):
         self.b_block_2 = RCB(2 * n_feat, self.act, bias=bias)
         self.b_fea_conv = nn.Conv2d(n_feat, n_feat, kernel_size=3, padding=1, bias=bias)
 
+        self.refine = nn.Sequential(
+            RCB(n_feat, self.act, bias=bias),
+            VSSBlock2D(dim=n_feat, expand=2, dw_kernel=3)
+        )
+
     def forward(self, x, la):
         x_top = x.clone()
         x_top_la = self.conv_in(la)
@@ -445,6 +470,7 @@ class AIMnet(nn.Module):
         grad_out = x_cat_2 + x_b_fea
         res_grad = self.grad_out(grad_out)
         out = self.aff_final(mid_out, grad_out)
+        out = self.refine(out)
         result = self.conv_out(out)
 
         return result, res_grad

@@ -105,7 +105,7 @@ class Trainer:
             initialize_weights(self.model)
         else:
             print("Loading checkpoint: {}/ckpt.pth ...".format(self.args.save_path))
-            checkpoint = torch.load(self.args.save_path + "ckpt.pth")
+            checkpoint = torch.load(self.args.save_path + "ckpt_last.pth")
             self.model.load_state_dict(checkpoint['state_dict'])
             self.optimizer_s.load_state_dict(checkpoint['optimizer_dict'])
             self.start_epoch = checkpoint['epoch'] + 1
@@ -147,6 +147,7 @@ class Trainer:
                 best_psnr = val_psnr
                 print(f"Saving best model (val_psnr={best_psnr:.4f}) ...")
                 torch.save(self.model.state_dict(), os.path.join(self.args.save_path, 'model_best_student.pth'))
+                torch.save(self.model.state_dict(), os.path.join(self.args.save_path, 'model_best_teacher.pth'))
 
     def _train_epoch(self, epoch):
         sup_loss = AverageMeter()
@@ -226,7 +227,8 @@ class Trainer:
                 val_label = Variable(val_label).cuda()
                 val_la = Variable(val_la).cuda()
                 # forward
-                val_output, _ = self.model(val_data, val_la)
+                # val_output, _ = self.model(val_data, val_la)
+                val_output, _ = self.tmodel(val_data, val_la)
                 temp_psnr, temp_ssim, N = compute_psnr_ssim(val_output, val_label)
                 val_psnr.update(temp_psnr, N)
                 val_ssim.update(temp_ssim, N)
