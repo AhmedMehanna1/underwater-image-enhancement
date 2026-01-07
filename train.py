@@ -21,9 +21,9 @@ def main(gpu, args):
     paired_sampler = None
     unpaired_sampler = None
     val_sampler = None
-    paired_loader = DataLoader(paired_dataset, batch_size=args.train_batchsize, sampler=paired_sampler)
-    unpaired_loader = DataLoader(unpaired_dataset, batch_size=args.train_batchsize, sampler=unpaired_sampler)
-    val_loader = DataLoader(val_dataset, batch_size=args.val_batchsize, sampler=val_sampler)
+    paired_loader = DataLoader(paired_dataset, batch_size=args.train_batchsize, shuffle=True, sampler=paired_sampler)
+    unpaired_loader = DataLoader(unpaired_dataset, batch_size=args.train_batchsize, shuffle=True, sampler=unpaired_sampler)
+    val_loader = DataLoader(val_dataset, batch_size=args.val_batchsize, shuffle=True, sampler=val_sampler)
     print('there are total %s batches for train' % (len(paired_loader)))
     print('there are total %s batches for val' % (len(val_loader)))
     # create model
@@ -33,9 +33,10 @@ def main(gpu, args):
     print('student model params: %d' % count_parameters(net))
     # tensorboard
     writer = SummaryWriter(log_dir=args.log_dir)
+    iter_per_epoch = max(len(paired_loader), len(unpaired_loader))
     trainer = Trainer(model=net, tmodel=ema_net, args=args, supervised_loader=paired_loader,
                       unsupervised_loader=unpaired_loader,
-                      val_loader=val_loader, iter_per_epoch=len(unpaired_loader), writer=writer)
+                      val_loader=val_loader, iter_per_epoch=iter_per_epoch, writer=writer)
 
     trainer.train()
     writer.close()

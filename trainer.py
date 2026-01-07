@@ -104,8 +104,9 @@ class Trainer:
         if not self.args.resume:
             initialize_weights(self.model)
         else:
-            print("Loading checkpoint: {}/ckpt.pth ...".format(self.args.save_path))
-            checkpoint = torch.load(self.args.save_path + "ckpt_last.pth")
+            ckpt_path = os.path.join(self.args.save_path, "ckpt_last.pth")
+            print("Loading checkpoint: {} ...".format(ckpt_path))
+            checkpoint = torch.load(ckpt_path)
             self.model.load_state_dict(checkpoint['state_dict'])
             self.optimizer_s.load_state_dict(checkpoint['optimizer_dict'])
             self.start_epoch = checkpoint['epoch'] + 1
@@ -157,11 +158,29 @@ class Trainer:
         psnr_train = []
         self.model.train()
         self.freeze_teachers_parameters()
+
+        sup_len = len(self.supervised_loader)
+        unsup_len = len(self.unsupervised_loader)
+        steps = self.iter_per_epoch
+
+        sup_iter = iter(self.supervised_loader)
+        unsup_iter = iter(self.unsupervised_loader)
+
+        if sup_len < steps:
+            sup_iter = cycle(self.supervised_loader)
+        if unsup_len < steps:
+            unsup_iter = cycle(self.unsupervised_loader)
+
+
         train_loader = iter(zip(cycle(self.supervised_loader), self.unsupervised_loader))
-        tbar = range(len(self.unsupervised_loader))
-        tbar = tqdm(tbar, ncols=130, leave=True)
-        for i in tbar:
-            (img_data, label, img_la), (unpaired_data_w, unpaired_data_s, unpaired_la, p_list, p_name) = next(train_loader)
+        #tbar = range(len(self.unsupervised_loader))
+        #tbar = tqdm(tbar, ncols=130, leave=True)
+        tbar = tqdm(range(steps), ncols=130, leave=True)
+
+        for _ in tbar:
+            (img_data, label, img_la) = next(sup_iter)
+            (unpaired_data_w, unpaired_data_s, unpaired_la, p_list, p_name) = next(unsup_iter)
+            #(img_data, label, img_la), (unpaired_data_w, unpaired_data_s, unpaired_la, p_list, p_name) = next(train_loader)
             img_data = Variable(img_data).cuda(non_blocking=True)
             label = Variable(label).cuda(non_blocking=True)
             img_la = Variable(img_la).cuda(non_blocking=True)
@@ -227,8 +246,8 @@ class Trainer:
                 val_label = Variable(val_label).cuda()
                 val_la = Variable(val_la).cuda()
                 # forward
-                # val_output, _ = self.model(val_data, val_la)
-                val_output, _ = self.tmodel(val_data, val_la)
+                val_output, _ = self.model(val_data, val_la)
+                # val_output, _ = self.tmodel(val_data, val_la)
                 temp_psnr, temp_ssim, N = compute_psnr_ssim(val_output, val_label)
                 val_psnr.update(temp_psnr, N)
                 val_ssim.update(temp_ssim, N)
