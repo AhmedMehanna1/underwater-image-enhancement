@@ -32,7 +32,21 @@ python3.8 -m venv venv38
 
 pip install --upgrade pip
 
+
+pip install torch==1.8.1+cu111 torchvision==0.9.1+cu111 torchaudio===0.8.1 -f https://download.pytorch.org/whl/torch_stable.html
+
+pip install numpy==1.20.0 pandas==1.2.1 scikit-image==0.18.1 pyiqa==0.1.4 pillow==8.4.0 tqdm seaborn adamp
+
+pip install --no-cache-dir --only-binary=:all: "mmcv-full==1.7.2" -f https://download.openmmlab.com/mmcv/dist/cu111/torch1.8.0/index.html
+
+
 pip install pyiqa tqdm seaborn scikit-image adamp
+
+pip install numpy==1.20.0 pandas==1.2.1 scikit-image==0.18.1 pyiqa==0.1.4 pillow==8.4.0 tqdm seaborn adamp
+
+pip uninstall numpy scikit-image pandas pyiqa pillow
+
+pip install numpy==1.20.0 pandas==1.2.1 scikit-image==0.18.1 pyiqa==0.1.4 pillow==8.4.0
 
 pip install torch==1.8.1+cu111 torchvision==0.9.1+cu111 torchaudio===0.8.1 -f https://download.pytorch.org/whl/torch_stable.html
 
