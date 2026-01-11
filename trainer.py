@@ -47,6 +47,10 @@ class Trainer:
         self.iqa_metric.eval()
         for p in self.iqa_metric.parameters():
             p.requires_grad_(False)
+        self.musiq = pyiqa.create_metric("musiq", as_loss=False).cuda()
+        self.musiq.eval()
+        for p in self.musiq.parameters():
+            p.requires_grad_(False)
         vgg_model = vgg16(pretrained=True).features[:16]
         vgg_model = vgg_model.cuda()
         self.loss_per = PerpetualLoss(vgg_model).cuda()
@@ -92,7 +96,7 @@ class Trainer:
                     # update the reliable bank
                     temp_c = np.transpose(teacher_predict[idx].detach().cpu().numpy(), (1, 2, 0))
                     temp_c = np.clip(temp_c, 0, 1)
-                    arr_c = (temp_c*255).astype(np.uint8)
+                    arr_c = (temp_c * 255).astype(np.uint8)
                     arr_c = Image.fromarray(arr_c)
                     arr_c.save('%s' % p_name[idx])
         del N, score_r, score_s, score_t, teacher_predict, student_predict, positive_list
@@ -151,9 +155,14 @@ class Trainer:
                 torch.save(self.model.state_dict(), os.path.join(self.args.save_path, 'model_best_teacher.pth'))
 
     def _train_epoch(self, epoch):
+        total_loss = AverageMeter()
         sup_loss = AverageMeter()
         unsup_loss = AverageMeter()
         psnr_meter = AverageMeter()
+        ssim_meter = AverageMeter()
+        uiqm_meter = AverageMeter()
+        uciqe_meter = AverageMeter()
+        musiq_meter = AverageMeter()
         total_loss_meter = AverageMeter()
         psnr_train = []
         self.model.train()
@@ -171,16 +180,20 @@ class Trainer:
         if unsup_len < steps:
             unsup_iter = cycle(self.unsupervised_loader)
 
-
         train_loader = iter(zip(cycle(self.supervised_loader), self.unsupervised_loader))
-        #tbar = range(len(self.unsupervised_loader))
-        #tbar = tqdm(tbar, ncols=130, leave=True)
-        tbar = tqdm(range(steps), ncols=130, leave=True)
+        # tbar = range(len(self.unsupervised_loader))
+        # tbar = tqdm(tbar, ncols=130, leave=True)
+        tbar = tqdm(range(steps), ncols=170, leave=True)
+
+        tbar.set_description(
+            'Train-Student Epoch {} | Ls: {:.4f} Lu: {:.4f}| PSNR: {:.4f}| SSIM: {:.4f}| UIQM: {:.4f}| UCIQE: {:.4f}| MUSIQ: {:.4f}'
+            .format(epoch, sup_loss.avg, unsup_loss.avg, psnr_meter.avg, ssim_meter.avg, uiqm_meter.avg,
+                    uciqe_meter.avg, musiq_meter.avg))
 
         for _ in tbar:
             (img_data, label, img_la) = next(sup_iter)
             (unpaired_data_w, unpaired_data_s, unpaired_la, p_list, p_name) = next(unsup_iter)
-            #(img_data, label, img_la), (unpaired_data_w, unpaired_data_s, unpaired_la, p_list, p_name) = next(train_loader)
+            # (img_data, label, img_la), (unpaired_data_w, unpaired_data_s, unpaired_la, p_list, p_name) = next(train_loader)
             img_data = Variable(img_data).cuda(non_blocking=True)
             label = Variable(label).cuda(non_blocking=True)
             img_la = Variable(img_la).cuda(non_blocking=True)
@@ -196,7 +209,9 @@ class Trainer:
             outputs_ul, _ = self.model(unpaired_data_s, unpaired_la)
             structure_loss = self.loss_str(outputs_l, label)
             perpetual_loss = self.loss_per(outputs_l, label)
-            gradient_loss = self.loss_grad(self.get_grad(outputs_l), self.get_grad(label)) + self.loss_grad(outputs_g, self.get_grad(label))
+            gradient_loss = self.loss_grad(self.get_grad(outputs_l), self.get_grad(label)) + self.loss_grad(outputs_g,
+                                                                                                            self.get_grad(
+                                                                                                                label))
             loss_sup = structure_loss + 0.3 * perpetual_loss + 0.1 * gradient_loss
             sup_loss.update(loss_sup.mean().item())
             grad_state = torch.is_grad_enabled()
@@ -210,16 +225,31 @@ class Trainer:
             total_loss = consistency_weight * loss_unsu + loss_sup
             total_loss = total_loss.mean()
             total_loss_meter.update(total_loss.item())
+
+            temp_psnr, temp_ssim, N = compute_psnr_ssim(outputs_l, label)
+            psnr_meter.update(temp_psnr, N)
+            ssim_meter.update(temp_ssim, N)
+
+            for recovered, clean in zip(outputs_l, label):
+                out_rgb = tensor_to_uint8_rgb(recovered)
+                uiqm_v = uiqm(out_rgb)
+                uciqe_v = uciqe(out_rgb)
+                uiqm_meter.update(uiqm_v)
+                uciqe_meter.update(uciqe_v)
+                #with torch.no_grad():
+                #    musiq_v = float(self.musiq(recovered).mean().item())
+                #musiq_meter.update(musiq_v)
+
             psnr_batch = to_psnr(outputs_l, label)
-            for psnr in psnr_batch:
-                psnr_meter.update(psnr)
             psnr_train.extend(psnr_batch)
             self.optimizer_s.zero_grad()
             total_loss.backward()
             self.optimizer_s.step()
 
-            tbar.set_description('Train-Student Epoch {} | Ls {:.4f} Lu {:.4f}| psnr {:.4f}'
-                                 .format(epoch, sup_loss.avg, unsup_loss.avg, psnr_meter.avg))
+            tbar.set_description(
+                'Train-Student Epoch {} | Ls: {:.4f} Lu: {:.4f}| PSNR: {:.4f}| SSIM: {:.4f}| UIQM: {:.4f}| UCIQE: {:.4f}| MUSIQ: {:.4f}'
+                .format(epoch, sup_loss.avg, unsup_loss.avg, psnr_meter.avg, ssim_meter.avg, uiqm_meter.avg,
+                        uciqe_meter.avg, musiq_meter.avg))
 
             del img_data, label, unpaired_data_w, unpaired_data_s, img_la, unpaired_la,
             with torch.no_grad():
@@ -236,10 +266,17 @@ class Trainer:
         psnr_val = []
         self.model.eval()
         self.tmodel.eval()
-        val_psnr = AverageMeter()
-        val_ssim = AverageMeter()
+        psnr_meter = AverageMeter()
+        ssim_meter = AverageMeter()
+        uiqm_meter = AverageMeter()
+        uciqe_meter = AverageMeter()
+        musiq_meter = AverageMeter()
         total_loss_val = AverageMeter()
-        tbar = tqdm(self.val_loader, ncols=130)
+        tbar = tqdm(self.val_loader, ncols=170)
+        tbar.set_description(
+            '{} Epoch {} | PSNR: {:.4f}, SSIM: {:.4f}| UIQM: {:.4f}| UCIQE: {:.4f}| MUSIQ: {:.4f}'.format(
+                "Eval-Student", epoch, psnr_meter.avg, ssim_meter.avg, uiqm_meter.avg, uciqe_meter.avg,
+                musiq_meter.avg))
         with torch.no_grad():
             for i, (val_data, val_label, val_la) in enumerate(tbar):
                 val_data = Variable(val_data).cuda()
@@ -249,14 +286,27 @@ class Trainer:
                 val_output, _ = self.model(val_data, val_la)
                 # val_output, _ = self.tmodel(val_data, val_la)
                 temp_psnr, temp_ssim, N = compute_psnr_ssim(val_output, val_label)
-                val_psnr.update(temp_psnr, N)
-                val_ssim.update(temp_ssim, N)
-                psnr_val.extend(to_psnr(val_output, val_label))
-                tbar.set_description('{} Epoch {} | PSNR: {:.4f}, SSIM: {:.4f}|'.format(
-                    "Eval-Student", epoch, val_psnr.avg, val_ssim.avg))
+                psnr_meter.update(temp_psnr, N)
+                ssim_meter.update(temp_ssim, N)
 
-            self.writer.add_scalar('Val_psnr', val_psnr.avg, global_step=epoch)
-            self.writer.add_scalar('Val_ssim', val_ssim.avg, global_step=epoch)
+                for recovered, clean in zip(val_output, val_label):
+                    out_rgb = tensor_to_uint8_rgb(recovered)
+                    uiqm_v = uiqm(out_rgb)
+                    uciqe_v = uciqe(out_rgb)
+                    uiqm_meter.update(uiqm_v)
+                    uciqe_meter.update(uciqe_v)
+                    #with torch.no_grad():
+                    #    musiq_v = float(self.musiq(recovered).mean().item())
+                    #musiq_meter.update(musiq_v)
+
+                psnr_val.extend(to_psnr(val_output, val_label))
+                tbar.set_description(
+                    '{} Epoch {} | PSNR: {:.4f}, SSIM: {:.4f}| UIQM: {:.4f}| UCIQE: {:.4f}| MUSIQ: {:.4f}'.format(
+                        "Eval-Student", epoch, psnr_meter.avg, ssim_meter.avg, uiqm_meter.avg, uciqe_meter.avg,
+                        musiq_meter.avg))
+
+            self.writer.add_scalar('Val_psnr', psnr_meter.avg, global_step=epoch)
+            self.writer.add_scalar('Val_ssim', ssim_meter.avg, global_step=epoch)
             del val_output, val_label, val_data
             return psnr_val
 
@@ -283,3 +333,4 @@ class Trainer:
             current = np.clip(current, 0.0, rampup_length)
             phase = 1.0 - current / rampup_length
             return float(np.exp(-5.0 * phase * phase))
+

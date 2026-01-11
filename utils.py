@@ -1,4 +1,6 @@
+import cv2
 import torch
+import torch.fx
 import random
 from math import log10
 import numpy as np
@@ -93,3 +95,157 @@ def compute_psnr_ssim(recoverd, clean):
 
     return psnr / recoverd.shape[0], ssim / recoverd.shape[0], recoverd.shape[0]
 
+# -----------------------------
+# Utils: save tensor image
+# -----------------------------
+def tensor_to_uint8_rgb(x: torch.Tensor) -> np.ndarray:
+    """
+    x: (1,3,H,W) or (3,H,W), assumed in [0,1]
+    returns uint8 RGB (H,W,3)
+    """
+    if x.dim() == 4:
+        x = x[0]
+    x = x.detach().clamp(0, 1).cpu().permute(1, 2, 0).numpy()
+    x = (x * 255.0).round().astype(np.uint8)
+    return x
+
+
+# -----------------------------
+# UIQM implementation (UICM + UISM + UIConM)
+# -----------------------------
+def _alpha_trim(x: np.ndarray, alpha: float = 0.1) -> np.ndarray:
+    x = np.sort(x.flatten())
+    n = x.size
+    k = int(alpha * n)
+    if n - 2 * k <= 0:
+        return x
+    return x[k: n - k]
+
+
+def _uicm(rgb: np.ndarray) -> float:
+    # rgb uint8 [0..255]
+    r = rgb[:, :, 0].astype(np.float32)
+    g = rgb[:, :, 1].astype(np.float32)
+    b = rgb[:, :, 2].astype(np.float32)
+
+    rg = r - g
+    yb = 0.5 * (r + g) - b
+
+    rg_t = _alpha_trim(rg, 0.1)
+    yb_t = _alpha_trim(yb, 0.1)
+
+    mu_rg = float(np.mean(rg_t))
+    mu_yb = float(np.mean(yb_t))
+    sigma_rg = float(np.std(rg_t))
+    sigma_yb = float(np.std(yb_t))
+
+    # Standard UICM form used in common UIQM implementations
+    return np.sqrt(mu_rg * mu_rg + mu_yb * mu_yb) + 0.3 * np.sqrt(sigma_rg * sigma_rg + sigma_yb * sigma_yb)
+
+
+def _eme(gray: np.ndarray, block_size: int = 8, eps: float = 1e-6) -> float:
+    """
+    Enhancement Measure Estimation (EME) computed on gray float32 image [0..1]
+    """
+    h, w = gray.shape
+    bh = max(1, h // block_size)
+    bw = max(1, w // block_size)
+
+    eme_sum = 0.0
+    count = 0
+    for i in range(0, h, bh):
+        for j in range(0, w, bw):
+            block = gray[i:i + bh, j:j + bw]
+            if block.size == 0:
+                continue
+            bmax = float(np.max(block))
+            bmin = float(np.min(block))
+            eme_sum += np.log((bmax + eps) / (bmin + eps))
+            count += 1
+    if count == 0:
+        return 0.0
+    return eme_sum / count
+
+
+def _uism(rgb: np.ndarray) -> float:
+    """
+    Underwater Image Sharpness Measure (UISM) - common implementation:
+    compute Sobel gradient magnitude per channel then EME over each, weighted.
+    """
+    rgb_f = rgb.astype(np.float32) / 255.0
+    weights = [0.299, 0.587, 0.114]  # approx luminance weights
+    uism = 0.0
+    for c, w in enumerate(weights):
+        ch = rgb_f[:, :, c]
+        gx = cv2.Sobel(ch, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(ch, cv2.CV_32F, 0, 1, ksize=3)
+        gmag = cv2.magnitude(gx, gy)
+        uism += w * _eme(gmag, block_size=8)
+    return float(uism)
+
+
+def _uiconm(rgb: np.ndarray, block_size: int = 8, eps: float = 1e-6) -> float:
+    """
+    Underwater Image Contrast Measure (UIConM) - common block-based contrast measure.
+    """
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+    h, w = gray.shape
+    bh = max(1, h // block_size)
+    bw = max(1, w // block_size)
+
+    s = 0.0
+    count = 0
+    for i in range(0, h, bh):
+        for j in range(0, w, bw):
+            block = gray[i:i + bh, j:j + bw]
+            if block.size == 0:
+                continue
+            bmax = float(np.max(block))
+            bmin = float(np.min(block))
+            # log contrast in block
+            s += np.log((bmax - bmin + eps) / (bmax + bmin + eps) + 1.0)
+            count += 1
+    if count == 0:
+        return 0.0
+    return float(s / count)
+
+
+def uiqm(rgb_uint8: np.ndarray) -> float:
+    """
+    UIQM = 0.0282*UICM + 0.2953*UISM + 3.5753*UIConM
+    """
+    uicm = _uicm(rgb_uint8)
+    uism = _uism(rgb_uint8)
+    uiconm = _uiconm(rgb_uint8)
+    return float(0.0282 * uicm + 0.2953 * uism + 3.5753 * uiconm)
+
+
+# -----------------------------
+# UCIQE implementation
+# -----------------------------
+def uciqe(rgb_uint8: np.ndarray) -> float:
+    """
+    Common UCIQE implementation in Lab space:
+    UCIQE = 0.4680*sigma_c + 0.2745*con_l + 0.2576*mu_s
+
+    - sigma_c: std of chroma in Lab
+    - con_l: contrast of L (max-min)
+    - mu_s: mean saturation (C / sqrt(C^2 + L^2))
+    """
+    rgb = rgb_uint8.astype(np.float32) / 255.0
+    # convert RGB->Lab (OpenCV expects BGR)
+    bgr = rgb[:, :, ::-1]
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+    L = lab[:, :, 0] / 255.0  # normalize [0..1] (approx)
+    a = (lab[:, :, 1] - 128.0) / 255.0
+    b = (lab[:, :, 2] - 128.0) / 255.0
+
+    C = np.sqrt(a * a + b * b)
+    sigma_c = float(np.std(C))
+    con_l = float(np.max(L) - np.min(L))
+
+    # saturation proxy used in many UCIQE implementations
+    mu_s = float(np.mean(C / (np.sqrt(C * C + L * L) + 1e-6)))
+
+    return float(0.4680 * sigma_c + 0.2745 * con_l + 0.2576 * mu_s)

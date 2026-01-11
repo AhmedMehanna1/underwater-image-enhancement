@@ -110,9 +110,9 @@ class VSSBlock2D(nn.Module):
 
         x = x + y                  # residual
 
-        # FFN (channel mixing)
-        x_ln2 = self.ffn_norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2).contiguous()
-        x = x + self.ffn(x_ln2)
+        ## FFN (channel mixing)
+        #x_ln2 = self.ffn_norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2).contiguous()
+        #x = x + self.ffn(x_ln2)
         return x
 
 class SFT_layer(nn.Module):
