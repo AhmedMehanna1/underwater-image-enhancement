@@ -40,6 +40,9 @@ class Trainer:
         self.loss_str = MyLoss().cuda()
         self.loss_grad = nn.L1Loss().cuda()
         self.loss_cr = ContrastLoss().cuda()
+        self.loss_chroma = ChromaLoss().cuda()
+        self.loss_saturation = SaturationLoss().cuda()
+        self.loss_gray_world = GrayWorldLoss().cuda()
         self.consistency = 0.2
         self.consistency_rampup = 100.0
         self.get_grad = GetGradientNopadding().cuda()
@@ -104,6 +107,7 @@ class Trainer:
 
     def train(self):
         best_psnr = -1e9
+        best_val_loss = float("inf")
         self.freeze_teachers_parameters()
         if not self.args.resume:
             initialize_weights(self.model)
@@ -119,14 +123,13 @@ class Trainer:
             self.curiter = checkpoint.get('curiter', 0)
             best_psnr = checkpoint.get('best_psnr', -1e9)
         for epoch in range(self.start_epoch, self.epochs + 1):
-            loss_ave, psnr_train = self._train_epoch(epoch)
+            loss_ave = self._train_epoch(epoch)
             loss_val = float(loss_ave)
-            train_psnr = sum(psnr_train) / len(psnr_train)
-            psnr_val = self._valid_epoch(max(0, epoch))
+            psnr_val, val_loss = self._valid_epoch(max(0, epoch))
             val_psnr = sum(psnr_val) / len(psnr_val)
 
-            print('[%d] main_loss: %.6f, train psnr: %.6f, val psnr: %.6f, lr: %.8f' % (
-                epoch, loss_val, train_psnr, val_psnr, self.lr_scheduler_s.get_last_lr()[0]))
+            print('[%d] main_loss: %.6f, val psnr: %.6f, val loss: %.6f, lr: %.8f' % (
+                epoch, loss_val, val_psnr, val_loss, self.lr_scheduler_s.get_last_lr()[0]))
 
             for name, param in self.model.named_parameters():
                 self.writer.add_histogram(f"{name}", param, 0)
@@ -140,7 +143,8 @@ class Trainer:
                      'teacher_state_dict': self.tmodel.state_dict(),
                      'scheduler_dict': self.lr_scheduler_s.state_dict(),
                      'curiter': self.curiter,
-                     'best_psnr': best_psnr
+                     'best_psnr': best_psnr,
+                     'best_val_loss': best_val_loss,
                      }
             ckpt_name = os.path.join(self.args.save_path, 'ckpt_last.pth')
             torch.save(state, ckpt_name)
@@ -148,9 +152,9 @@ class Trainer:
             if epoch % self.save_period == 0:
                 torch.save(state, os.path.join(self.args.save_path, f'ckpt_epoch_{epoch}.pth'))
 
-            if val_psnr > best_psnr:
-                best_psnr = val_psnr
-                print(f"Saving best model (val_psnr={best_psnr:.4f}) ...")
+            if val_loss > best_val_loss:
+                best_val_loss = val_loss
+                print(f"Saving best model (val_psnr={best_psnr:.4f}) val_loss={val_loss:.4f} ...")
                 torch.save(self.model.state_dict(), os.path.join(self.args.save_path, 'model_best_student.pth'))
                 torch.save(self.model.state_dict(), os.path.join(self.args.save_path, 'model_best_teacher.pth'))
 
@@ -158,13 +162,7 @@ class Trainer:
         total_loss = AverageMeter()
         sup_loss = AverageMeter()
         unsup_loss = AverageMeter()
-        psnr_meter = AverageMeter()
-        ssim_meter = AverageMeter()
-        uiqm_meter = AverageMeter()
-        uciqe_meter = AverageMeter()
-        musiq_meter = AverageMeter()
         total_loss_meter = AverageMeter()
-        psnr_train = []
         self.model.train()
         self.freeze_teachers_parameters()
 
@@ -186,9 +184,9 @@ class Trainer:
         tbar = tqdm(range(steps), ncols=170, leave=True)
 
         tbar.set_description(
-            'Train-Student Epoch {} | Ls: {:.4f} Lu: {:.4f}| PSNR: {:.4f}| SSIM: {:.4f}| UIQM: {:.4f}| UCIQE: {:.4f}| MUSIQ: {:.4f}'
-            .format(epoch, sup_loss.avg, unsup_loss.avg, psnr_meter.avg, ssim_meter.avg, uiqm_meter.avg,
-                    uciqe_meter.avg, musiq_meter.avg))
+            'Train-Student Epoch {} | Ls: {:.4f} Lu: {:.4f}|'
+            .format(epoch, sup_loss.avg, unsup_loss.avg)
+        )
 
         for _ in tbar:
             (img_data, label, img_la) = next(sup_iter)
@@ -212,7 +210,19 @@ class Trainer:
             gradient_loss = self.loss_grad(self.get_grad(outputs_l), self.get_grad(label)) + self.loss_grad(outputs_g,
                                                                                                             self.get_grad(
                                                                                                                 label))
-            loss_sup = structure_loss + 0.3 * perpetual_loss + 0.1 * gradient_loss
+            outputs_l_01 = outputs_l.clamp(0, 1)
+            label_01 = label.clamp(0, 1)
+
+            chroma_loss = self.loss_chroma(outputs_l_01, label_01)
+            saturation_loss = self.loss_saturation(outputs_l_01, label_01)
+            gray_world_loss = self.loss_gray_world(outputs_l_01)
+
+            loss_sup = structure_loss \
+                       + 0.1 * perpetual_loss \
+                       + 0.1 * gradient_loss \
+                       + 0.15 * chroma_loss \
+                       + 0.05 * saturation_loss \
+                       + 0.02 * gray_world_loss
             sup_loss.update(loss_sup.mean().item())
             grad_state = torch.is_grad_enabled()
             with torch.no_grad():
@@ -226,30 +236,14 @@ class Trainer:
             total_loss = total_loss.mean()
             total_loss_meter.update(total_loss.item())
 
-            temp_psnr, temp_ssim, N = compute_psnr_ssim(outputs_l, label)
-            psnr_meter.update(temp_psnr, N)
-            ssim_meter.update(temp_ssim, N)
-
-            for recovered, clean in zip(outputs_l, label):
-                out_rgb = tensor_to_uint8_rgb(recovered)
-                uiqm_v = uiqm(out_rgb)
-                uciqe_v = uciqe(out_rgb)
-                uiqm_meter.update(uiqm_v)
-                uciqe_meter.update(uciqe_v)
-                #with torch.no_grad():
-                #    musiq_v = float(self.musiq(recovered).mean().item())
-                #musiq_meter.update(musiq_v)
-
-            psnr_batch = to_psnr(outputs_l, label)
-            psnr_train.extend(psnr_batch)
             self.optimizer_s.zero_grad()
             total_loss.backward()
             self.optimizer_s.step()
 
             tbar.set_description(
-                'Train-Student Epoch {} | Ls: {:.4f} Lu: {:.4f}| PSNR: {:.4f}| SSIM: {:.4f}| UIQM: {:.4f}| UCIQE: {:.4f}| MUSIQ: {:.4f}'
-                .format(epoch, sup_loss.avg, unsup_loss.avg, psnr_meter.avg, ssim_meter.avg, uiqm_meter.avg,
-                        uciqe_meter.avg, musiq_meter.avg))
+                'Train-Student Epoch {} | Ls: {:.4f} Lu: {:.4f}|'
+                .format(epoch, sup_loss.avg, unsup_loss.avg)
+            )
 
             del img_data, label, unpaired_data_w, unpaired_data_s, img_la, unpaired_la,
             with torch.no_grad():
@@ -260,55 +254,78 @@ class Trainer:
         self.writer.add_scalar('sup_loss', sup_loss.avg, global_step=epoch)
         self.writer.add_scalar('unsup_loss', unsup_loss.avg, global_step=epoch)
         self.lr_scheduler_s.step(epoch=epoch - 1)
-        return total_loss_meter.avg, psnr_train
+        return total_loss_meter.avg
 
     def _valid_epoch(self, epoch):
         psnr_val = []
         self.model.eval()
         self.tmodel.eval()
+
         psnr_meter = AverageMeter()
         ssim_meter = AverageMeter()
         uiqm_meter = AverageMeter()
         uciqe_meter = AverageMeter()
         musiq_meter = AverageMeter()
-        total_loss_val = AverageMeter()
+        val_sup_loss_meter = AverageMeter()
+
         tbar = tqdm(self.val_loader, ncols=170)
-        tbar.set_description(
-            '{} Epoch {} | PSNR: {:.4f}, SSIM: {:.4f}| UIQM: {:.4f}| UCIQE: {:.4f}| MUSIQ: {:.4f}'.format(
-                "Eval-Student", epoch, psnr_meter.avg, ssim_meter.avg, uiqm_meter.avg, uciqe_meter.avg,
-                musiq_meter.avg))
         with torch.no_grad():
-            for i, (val_data, val_label, val_la) in enumerate(tbar):
-                val_data = Variable(val_data).cuda()
-                val_label = Variable(val_label).cuda()
-                val_la = Variable(val_la).cuda()
-                # forward
-                val_output, _ = self.model(val_data, val_la)
-                # val_output, _ = self.tmodel(val_data, val_la)
+            for val_data, val_label, val_la in tbar:
+                val_data = val_data.cuda(non_blocking=True)
+                val_label = val_label.cuda(non_blocking=True)
+                val_la = val_la.cuda(non_blocking=True)
+
+                with torch.cuda.amp.autocast(enabled=getattr(self, "use_amp", False)):
+                    val_output, val_g = self.model(val_data, val_la)
+
+                    structure_loss = self.loss_str(val_output, val_label)
+                    perpetual_loss = self.loss_per(val_output, val_label)
+                    gradient_loss = self.loss_grad(self.get_grad(val_output), self.get_grad(val_label)) + \
+                                    self.loss_grad(val_g, self.get_grad(val_label))
+
+                    out01 = val_output.clamp(0, 1)
+                    gt01 = val_label.clamp(0, 1)
+                    chroma_loss = self.loss_chroma(out01, gt01)
+                    saturation_loss = self.loss_saturation(out01, gt01)
+                    gray_world_loss = self.loss_gray_world(out01)
+
+                    val_sup_loss = structure_loss \
+                                   + 0.10 * perpetual_loss \
+                                   + 0.10 * gradient_loss \
+                                   + 0.15 * chroma_loss \
+                                   + 0.05 * saturation_loss \
+                                   + 0.02 * gray_world_loss
+
+                val_sup_loss_meter.update(val_sup_loss.mean().item(), n=val_data.size(0))
+
                 temp_psnr, temp_ssim, N = compute_psnr_ssim(val_output, val_label)
                 psnr_meter.update(temp_psnr, N)
                 ssim_meter.update(temp_ssim, N)
 
-                for recovered, clean in zip(val_output, val_label):
+                for recovered in val_output:
                     out_rgb = tensor_to_uint8_rgb(recovered)
-                    uiqm_v = uiqm(out_rgb)
-                    uciqe_v = uciqe(out_rgb)
-                    uiqm_meter.update(uiqm_v)
-                    uciqe_meter.update(uciqe_v)
-                    #with torch.no_grad():
-                    #    musiq_v = float(self.musiq(recovered).mean().item())
-                    #musiq_meter.update(musiq_v)
+                    uiqm_meter.update(uiqm(out_rgb))
+                    uciqe_meter.update(uciqe(out_rgb))
+                    with torch.no_grad():
+                       musiq_v = float(self.musiq(recovered).mean().item())
+                    musiq_meter.update(musiq_v)
 
                 psnr_val.extend(to_psnr(val_output, val_label))
-                tbar.set_description(
-                    '{} Epoch {} | PSNR: {:.4f}, SSIM: {:.4f}| UIQM: {:.4f}| UCIQE: {:.4f}| MUSIQ: {:.4f}'.format(
-                        "Eval-Student", epoch, psnr_meter.avg, ssim_meter.avg, uiqm_meter.avg, uciqe_meter.avg,
-                        musiq_meter.avg))
 
+                tbar.set_description(
+                    f"Eval Epoch {epoch} | ValSupLoss: {val_sup_loss_meter.avg:.4f} | "
+                    f"PSNR: {psnr_meter.avg:.4f} SSIM: {ssim_meter.avg:.4f} | "
+                    f"UIQM: {uiqm_meter.avg:.4f} UCIQE: {uciqe_meter.avg:.4f} | MUSIQ: {musiq_meter.avg:.4f}"
+                )
+
+        if self.writer is not None:
+            self.writer.add_scalar('Val_sup_loss', val_sup_loss_meter.avg, global_step=epoch)
             self.writer.add_scalar('Val_psnr', psnr_meter.avg, global_step=epoch)
             self.writer.add_scalar('Val_ssim', ssim_meter.avg, global_step=epoch)
-            del val_output, val_label, val_data
-            return psnr_val
+            self.writer.add_scalar('Val_uiqm', uiqm_meter.avg, global_step=epoch)
+            self.writer.add_scalar('Val_uciqe', uciqe_meter.avg, global_step=epoch)
+
+        return psnr_val, val_sup_loss_meter.avg
 
     def _get_available_devices(self, n_gpu):
         sys_gpu = torch.cuda.device_count()
@@ -333,4 +350,3 @@ class Trainer:
             current = np.clip(current, 0.0, rampup_length)
             phase = 1.0 - current / rampup_length
             return float(np.exp(-5.0 * phase * phase))
-

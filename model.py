@@ -471,7 +471,7 @@ class AIMnet(nn.Module):
         res_grad = self.grad_out(grad_out)
         out = self.aff_final(mid_out, grad_out)
         out = self.refine(out)
-        result = self.conv_out(out)
+        result = torch.sigmoid(self.conv_out(out))
 
         return result, res_grad
 

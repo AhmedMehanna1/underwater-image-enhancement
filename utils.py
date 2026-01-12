@@ -142,30 +142,23 @@ def _uicm(rgb: np.ndarray) -> float:
     # Standard UICM form used in common UIQM implementations
     return np.sqrt(mu_rg * mu_rg + mu_yb * mu_yb) + 0.3 * np.sqrt(sigma_rg * sigma_rg + sigma_yb * sigma_yb)
 
-
 def _eme(gray: np.ndarray, block_size: int = 8, eps: float = 1e-6) -> float:
     """
     Enhancement Measure Estimation (EME) computed on gray float32 image [0..1]
     """
     h, w = gray.shape
-    bh = max(1, h // block_size)
-    bw = max(1, w // block_size)
-
     eme_sum = 0.0
     count = 0
-    for i in range(0, h, bh):
-        for j in range(0, w, bw):
-            block = gray[i:i + bh, j:j + bw]
+    for i in range(0, h, block_size):
+        for j in range(0, w, block_size):
+            block = gray[i:i + block_size, j:j + block_size]
             if block.size == 0:
                 continue
             bmax = float(np.max(block))
             bmin = float(np.min(block))
             eme_sum += np.log((bmax + eps) / (bmin + eps))
             count += 1
-    if count == 0:
-        return 0.0
-    return eme_sum / count
-
+    return 0.0 if count == 0 else eme_sum / count
 
 def _uism(rgb: np.ndarray) -> float:
     """
@@ -183,32 +176,24 @@ def _uism(rgb: np.ndarray) -> float:
         uism += w * _eme(gmag, block_size=8)
     return float(uism)
 
-
 def _uiconm(rgb: np.ndarray, block_size: int = 8, eps: float = 1e-6) -> float:
     """
     Underwater Image Contrast Measure (UIConM) - common block-based contrast measure.
     """
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
     h, w = gray.shape
-    bh = max(1, h // block_size)
-    bw = max(1, w // block_size)
-
     s = 0.0
     count = 0
-    for i in range(0, h, bh):
-        for j in range(0, w, bw):
-            block = gray[i:i + bh, j:j + bw]
+    for i in range(0, h, block_size):
+        for j in range(0, w, block_size):
+            block = gray[i:i + block_size, j:j + block_size]
             if block.size == 0:
                 continue
             bmax = float(np.max(block))
             bmin = float(np.min(block))
-            # log contrast in block
             s += np.log((bmax - bmin + eps) / (bmax + bmin + eps) + 1.0)
             count += 1
-    if count == 0:
-        return 0.0
-    return float(s / count)
-
+    return 0.0 if count == 0 else float(s / count)
 
 def uiqm(rgb_uint8: np.ndarray) -> float:
     """
@@ -225,27 +210,22 @@ def uiqm(rgb_uint8: np.ndarray) -> float:
 # -----------------------------
 def uciqe(rgb_uint8: np.ndarray) -> float:
     """
-    Common UCIQE implementation in Lab space:
-    UCIQE = 0.4680*sigma_c + 0.2745*con_l + 0.2576*mu_s
-
-    - sigma_c: std of chroma in Lab
-    - con_l: contrast of L (max-min)
-    - mu_s: mean saturation (C / sqrt(C^2 + L^2))
+    UCIQE in the commonly reported (<1) range.
+    - Uses OpenCV Lab, then normalizes:
+      L in [0,1], a/b in roughly [-0.5,0.5]
     """
     rgb = rgb_uint8.astype(np.float32) / 255.0
-    # convert RGB->Lab (OpenCV expects BGR)
     bgr = rgb[:, :, ::-1]
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
 
-    L = lab[:, :, 0] / 255.0  # normalize [0..1] (approx)
+    # OpenCV: L,a,b in [0..255]
+    L = lab[:, :, 0] / 255.0
     a = (lab[:, :, 1] - 128.0) / 255.0
     b = (lab[:, :, 2] - 128.0) / 255.0
 
     C = np.sqrt(a * a + b * b)
     sigma_c = float(np.std(C))
     con_l = float(np.max(L) - np.min(L))
-
-    # saturation proxy used in many UCIQE implementations
     mu_s = float(np.mean(C / (np.sqrt(C * C + L * L) + 1e-6)))
 
     return float(0.4680 * sigma_c + 0.2745 * con_l + 0.2576 * mu_s)

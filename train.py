@@ -11,6 +11,7 @@ from trainer import Trainer
 
 def main(gpu, args):
     args.local_rank = gpu
+    torch.backends.cudnn.benchmark = True  # big win for fixed 256x256
     # random seed
     setup_seed(2022)
     # load data
@@ -18,12 +19,37 @@ def main(gpu, args):
     paired_dataset = TrainLabeled(dataroot=train_folder, phase='labeled', finesize=args.crop_size)
     unpaired_dataset = TrainUnlabeled(dataroot=train_folder, phase='unlabeled', finesize=args.crop_size)
     val_dataset = ValLabeled(dataroot=train_folder, phase='val', finesize=args.crop_size)
-    paired_sampler = None
-    unpaired_sampler = None
-    val_sampler = None
-    paired_loader = DataLoader(paired_dataset, batch_size=args.train_batchsize, shuffle=True, sampler=paired_sampler)
-    unpaired_loader = DataLoader(unpaired_dataset, batch_size=args.train_batchsize, shuffle=True, sampler=unpaired_sampler)
-    val_loader = DataLoader(val_dataset, batch_size=args.val_batchsize, shuffle=True, sampler=val_sampler)
+    nw = 8  # try 4/8/12
+    paired_loader = DataLoader(
+        paired_dataset,
+        batch_size=args.train_batchsize,
+        shuffle=True,
+        num_workers=nw,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=4,
+        drop_last=True
+    )
+    unpaired_loader = DataLoader(
+        unpaired_dataset,
+        batch_size=args.train_batchsize,
+        shuffle=True,
+        num_workers=nw,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=4,
+        drop_last=True
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.val_batchsize,
+        shuffle=False,
+        num_workers=max(2, nw // 2),
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2,
+        drop_last=False
+    )
     print('there are total %s batches for train' % (len(paired_loader)))
     print('there are total %s batches for val' % (len(val_loader)))
     # create model
@@ -34,9 +60,16 @@ def main(gpu, args):
     # tensorboard
     writer = SummaryWriter(log_dir=args.log_dir)
     iter_per_epoch = max(len(paired_loader), len(unpaired_loader))
-    trainer = Trainer(model=net, tmodel=ema_net, args=args, supervised_loader=paired_loader,
-                      unsupervised_loader=unpaired_loader,
-                      val_loader=val_loader, iter_per_epoch=iter_per_epoch, writer=writer)
+    trainer = Trainer(
+        model=net,
+        tmodel=ema_net,
+        args=args,
+        supervised_loader=paired_loader,
+        unsupervised_loader=unpaired_loader,
+        val_loader=val_loader,
+        iter_per_epoch=iter_per_epoch,
+        writer=writer
+    )
 
     trainer.train()
     writer.close()
