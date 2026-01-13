@@ -122,6 +122,7 @@ class Trainer:
             self.lr_scheduler_s.load_state_dict(checkpoint['scheduler_dict'])
             self.curiter = checkpoint.get('curiter', 0)
             best_psnr = checkpoint.get('best_psnr', -1e9)
+            best_val_loss = checkpoint.get('best_val_loss', float("inf"))
         for epoch in range(self.start_epoch, self.epochs + 1):
             loss_ave = self._train_epoch(epoch)
             loss_val = float(loss_ave)
@@ -152,11 +153,11 @@ class Trainer:
             if epoch % self.save_period == 0:
                 torch.save(state, os.path.join(self.args.save_path, f'ckpt_epoch_{epoch}.pth'))
 
-            if val_loss > best_val_loss:
+            if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 print(f"Saving best model (val_psnr={best_psnr:.4f}) val_loss={val_loss:.4f} ...")
                 torch.save(self.model.state_dict(), os.path.join(self.args.save_path, 'model_best_student.pth'))
-                torch.save(self.model.state_dict(), os.path.join(self.args.save_path, 'model_best_teacher.pth'))
+                torch.save(self.tmodel.state_dict(), os.path.join(self.args.save_path, 'model_best_teacher.pth'))
 
     def _train_epoch(self, epoch):
         total_loss = AverageMeter()
